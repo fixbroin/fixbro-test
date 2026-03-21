@@ -125,6 +125,25 @@ export const generateInvoicePdf = async (booking: FirestoreBooking, companyDetai
     });
   }
 
+// ✅ ADDITIONAL SERVICES SUPPORT (Extra Charges)
+if (booking.additionalCharges && booking.additionalCharges.length > 0) {
+  const startIndex =
+    booking.services.length +
+    (booking.appliedPlatformFees?.length || 0);
+
+  booking.additionalCharges.forEach((charge, index) => {
+    body.push([
+      startIndex + index + 1,
+      charge.name + " (Extra Service/Part)",
+      1,
+      charge.amount.toFixed(2),
+      "0.0%",
+      "0.00",
+      charge.amount.toFixed(2),
+    ]);
+  });
+}
+
   doc.autoTable({
     head: head, body: body, startY: startYCustomer + 10, theme: 'striped',
     headStyles: { fillColor: [70, 160, 162] }, columnStyles: tableColumnStyles,
