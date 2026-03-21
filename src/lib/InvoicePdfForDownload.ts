@@ -176,6 +176,15 @@ if (booking.additionalCharges && booking.additionalCharges.length > 0) {
     drawRightAlignedText("Platform Fees (Base):", `+ Rs. ${totalBasePlatformFees.toFixed(2)}`, finalY);
   }
 
+  // ✅ Additional Charges (On-Site) summary support
+  if (booking.additionalCharges && booking.additionalCharges.length > 0) {
+    const extraTotal = booking.additionalCharges.reduce((sum, c) => sum + c.amount, 0);
+    if (extraTotal > 0) {
+      finalY += 6;
+      drawRightAlignedText("Additional Charges:", `+ Rs. ${extraTotal.toFixed(2)}`, finalY);
+    }
+  }
+
   finalY += 6;
   drawRightAlignedText("Total Tax:", `+ Rs. ${booking.taxAmount.toFixed(2)}`, finalY);
 
