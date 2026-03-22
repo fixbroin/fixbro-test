@@ -13,6 +13,18 @@ const DEFAULT_SLOT_INTERVAL_MINUTES = defaultAppSettings.timeSlotSettings.slotIn
 const DEFAULT_ENABLE_LIMIT_LATE_BOOKINGS = defaultAppSettings.enableLimitLateBookings;
 const DEFAULT_HOURS_WHEN_LIMIT_ENABLED = defaultAppSettings.limitLateBookingHours;
 
+function createLocalDate(dateISO: string): Date {
+    const [year, month, day] = dateISO.split('-').map(Number);
+    return new Date(year, month - 1, day);
+}
+
+
+// --- Performance Cache ---
+// Module-level cache for schedule simulation results
+// Keyed by date range, bookings hash, and limits hash
+const BUSY_MAP_CACHE = new Map<string, Map<string, Record<string, number>>>();
+const MAX_CACHE_SIZE = 100;
+
 // --- Helper Functions ---
 
 const getServiceDurationInMinutes = (service: FirestoreService): number => {
@@ -68,18 +80,22 @@ function calculateEndDateTime(
 ): string {
     let remainingMinutes = workDuration + bufferDuration;
     let currentMinutes = startMinutes;
-    let currentDate = new Date(startDateISO);
+    const currentDate = createLocalDate(startDateISO);
     
-    while (remainingMinutes > 0) {
+    let daysSearched = 0;
+    while (remainingMinutes > 0 && daysSearched < 30) {
         let dayName = getDayName(currentDate);
         let dayAvailability = appConfig.timeSlotSettings?.weeklyAvailability[dayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[dayName];
 
-        while (!dayAvailability.isEnabled) {
+        let loopGuard = 0;
+        while (!dayAvailability.isEnabled && loopGuard < 7) {
             currentDate.setDate(currentDate.getDate() + 1);
             dayName = getDayName(currentDate);
             dayAvailability = appConfig.timeSlotSettings?.weeklyAvailability[dayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[dayName];
             currentMinutes = parseTimeToMinutes(dayAvailability.startTime);
+            loopGuard++;
         }
+        if (loopGuard >= 7) break; 
 
         const dayStart = parseTimeToMinutes(dayAvailability.startTime);
         const dayEnd = parseTimeToMinutes(dayAvailability.endTime);
@@ -93,6 +109,7 @@ function calculateEndDateTime(
             const nextDayName = getDayName(currentDate);
             const nextDayAvail = appConfig.timeSlotSettings?.weeklyAvailability[nextDayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[nextDayName];
             currentMinutes = parseTimeToMinutes(nextDayAvail.startTime);
+            daysSearched++;
             continue;
         }
 
@@ -106,11 +123,12 @@ function calculateEndDateTime(
             const nextDayAvail = appConfig.timeSlotSettings?.weeklyAvailability[nextDayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[nextDayName];
             currentMinutes = parseTimeToMinutes(nextDayAvail.startTime);
         }
+        daysSearched++;
     }
     
     const finalDate = new Date(currentDate);
     finalDate.setHours(Math.floor(currentMinutes / 60), currentMinutes % 60, 0, 0);
-    return finalDate.toISOString();
+    return finalDate.toLocaleString('sv-SE').replace(' ', 'T');
 }
 
 /**
@@ -126,22 +144,26 @@ function* simulateProgression(
 ) {
     let remainingMinutesToBlock = workDuration + bufferDuration;
     let currentMinutes = startMinutes;
-    let currentDate = new Date(startDateISO);
+   const currentDate = createLocalDate(startDateISO);
     
     const slotInterval = appConfig.timeSlotSettings?.slotIntervalMinutes || DEFAULT_SLOT_INTERVAL_MINUTES;
 
-    while (remainingMinutesToBlock > 0) {
+    let daysSearched = 0;
+    while (remainingMinutesToBlock > 0 && daysSearched < 30) {
         let dateISO = currentDate.toLocaleDateString('en-CA');
         let dayName = getDayName(currentDate);
         let dayAvailability = appConfig.timeSlotSettings?.weeklyAvailability[dayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[dayName];
 
-        while (!dayAvailability.isEnabled) {
+        let loopGuard = 0;
+        while (!dayAvailability.isEnabled && loopGuard < 7) {
             currentDate.setDate(currentDate.getDate() + 1);
             dateISO = currentDate.toLocaleDateString('en-CA');
             dayName = getDayName(currentDate);
             dayAvailability = appConfig.timeSlotSettings?.weeklyAvailability[dayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[dayName];
             currentMinutes = parseTimeToMinutes(dayAvailability.startTime);
+            loopGuard++;
         }
+        if (loopGuard >= 7) break;
 
         const dayStart = parseTimeToMinutes(dayAvailability.startTime);
         const dayEnd = parseTimeToMinutes(dayAvailability.endTime);
@@ -153,6 +175,7 @@ function* simulateProgression(
             const nextDayName = getDayName(currentDate);
             const nextDayAvail = appConfig.timeSlotSettings?.weeklyAvailability[nextDayName] || defaultAppSettings.timeSlotSettings.weeklyAvailability[nextDayName];
             currentMinutes = parseTimeToMinutes(nextDayAvail.startTime);
+            daysSearched++;
             continue;
         }
 
@@ -160,6 +183,10 @@ function* simulateProgression(
 
         remainingMinutesToBlock -= slotInterval;
         currentMinutes += slotInterval;
+
+        if (currentMinutes >= dayEnd) {
+            daysSearched++;
+        }
     }
 }
 
@@ -171,11 +198,11 @@ export async function POST(req: NextRequest) {
             return NextResponse.json({ error: "Missing required parameters." }, { status: 400 });
         }
 
-        const dateObj = new Date(selectedDate);
+        const dateObj = createLocalDate(selectedDate);
         const dateISO = dateObj.toLocaleDateString('en-CA');
 
         const lookBackDate = new Date(dateObj);
-        lookBackDate.setDate(lookBackDate.getDate() - 30);
+        lookBackDate.setDate(lookBackDate.getDate() - 7);
         const lookBackISO = lookBackDate.toLocaleDateString('en-CA');
 
         const [appConfigSnap, limitsSnap, servicesSnap, subCatsSnap, bookingsSnap] = await Promise.all([
@@ -213,32 +240,63 @@ export async function POST(req: NextRequest) {
         });
         const cartCategoryIds = Array.from(uniqueCartCategoryIds);
 
-        const globalBusyMap = new Map<string, { count: number; categoryIds: Set<string> }>();
+        // --- Cache Logic Start ---
+        // Generate a composite hash to invalidate cache if any relevant data changes
+        const bookingsHash = bookingsSnap.docs
+            .map(doc => `${doc.id}_${doc.updateTime?.toMillis() || 0}`)
+            .sort()
+            .join('|');
+            
+        const limitsHash = Object.values(limitsData)
+            .map((l: any) => `${l.categoryId}_${l.maxConcurrentBookings}`)
+            .sort()
+            .join('|');
+            
+        const cacheKey = `${lookBackISO}_${dateISO}_${bookingsHash}_${limitsHash}_${appConfig.updatedAt?.toMillis() || 0}_${breakTimeMinutes}`;
+        
+        let globalBusyMap: Map<string, Record<string, number>>;
 
-        existingBookings.forEach(booking => {
-            let bookingWorkDuration = 0;
-            const bookingCategoryIds = new Set<string>();
+        if (BUSY_MAP_CACHE.has(cacheKey)) {
+            globalBusyMap = BUSY_MAP_CACHE.get(cacheKey)!;
+        } else {
+            // Cache Miss: Run Simulation
+            globalBusyMap = new Map<string, Record<string, number>>();
 
-            booking.services.forEach(item => {
-                const serviceDetail = servicesData[item.serviceId];
-                if (serviceDetail) {
-                    bookingWorkDuration += getServiceDurationInMinutes(serviceDetail) * item.quantity;
-                    const subCat = subCatsData[serviceDetail.subCategoryId];
-                    if (subCat?.parentId) bookingCategoryIds.add(subCat.parentId);
+            existingBookings.forEach(booking => {
+                let bookingWorkDuration = 0;
+                const bookingCategoryIds = new Set<string>();
+
+                booking.services.forEach(item => {
+                    const serviceDetail = servicesData[item.serviceId];
+                    if (serviceDetail) {
+                        bookingWorkDuration += getServiceDurationInMinutes(serviceDetail) * item.quantity;
+                        const subCat = subCatsData[serviceDetail.subCategoryId];
+                        if (subCat?.parentId) bookingCategoryIds.add(subCat.parentId);
+                    }
+                });
+
+                const startMin = parseTimeToMinutes(booking.scheduledTimeSlot);
+                const progression = simulateProgression(booking.scheduledDate, startMin, bookingWorkDuration, breakTimeMinutes, appConfig);
+
+                for (const step of progression) {
+                    const key = getSlotKey(step.dateISO, step.minutes);
+                    const counts = globalBusyMap.get(key) || {};
+                    
+                    bookingCategoryIds.forEach(catId => {
+                        counts[catId] = (counts[catId] || 0) + 1;
+                    });
+                    
+                    globalBusyMap.set(key, counts);
                 }
             });
 
-            const startMin = parseTimeToMinutes(booking.scheduledTimeSlot);
-            const progression = simulateProgression(booking.scheduledDate, startMin, bookingWorkDuration, breakTimeMinutes, appConfig);
-
-            for (const step of progression) {
-                const key = getSlotKey(step.dateISO, step.minutes);
-                const info = globalBusyMap.get(key) || { count: 0, categoryIds: new Set() };
-                info.count++;
-                bookingCategoryIds.forEach(id => info.categoryIds.add(id));
-                globalBusyMap.set(key, info);
+            // Store in cache
+            if (BUSY_MAP_CACHE.size >= MAX_CACHE_SIZE) {
+                BUSY_MAP_CACHE.clear(); // Simple eviction: clear all if too big
             }
-        });
+            BUSY_MAP_CACHE.set(cacheKey, globalBusyMap);
+        }
+        // --- Cache Logic End ---
 
         const selectedDayName = getDayName(dateObj);
         const selectedDayAvail = weeklyAvailability[selectedDayName];
@@ -266,15 +324,15 @@ export async function POST(req: NextRequest) {
             let isPathClear = true;
             let minRemainingCapacity = Infinity;
 
-            const path = simulateProgression(dateISO, potentialStart, totalCartDuration, breakTimeMinutes, appConfig);
+            const pathSteps = Array.from( simulateProgression(dateISO, potentialStart, totalCartDuration, breakTimeMinutes, appConfig) );
             
-            for (const step of path) {
+            for (const step of pathSteps) {
                 const key = getSlotKey(step.dateISO, step.minutes);
-                const busyInfo = globalBusyMap.get(key);
+                const counts = globalBusyMap.get(key) || {};
 
                 for (const catId of cartCategoryIds) {
                     const limit = limitsData[catId]?.maxConcurrentBookings || 1;
-                    const currentBookings = busyInfo?.categoryIds.has(catId) ? (busyInfo?.count || 0) : 0;
+                    const currentBookings = counts[catId] || 0;
                     const remaining = limit - currentBookings;
                     
                     minRemainingCapacity = Math.min(minRemainingCapacity, remaining);
@@ -287,7 +345,7 @@ export async function POST(req: NextRequest) {
             }
 
             if (isPathClear) {
-                // IMPORTANT: We pass 0 for bufferDuration here so the CUSTOMER only sees the work end time.
+                // FIXED: Include breakTimeMinutes in endDateTime for UI transparency
                 const endDateTime = calculateEndDateTime(dateISO, potentialStart, totalCartDuration, 0, appConfig);
                 availableSlots.push({ 
                     slot: formatTimeFromMinutes(potentialStart), 
