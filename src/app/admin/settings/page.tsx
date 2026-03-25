@@ -8,6 +8,7 @@ import { Settings, Save, Loader2, AlertCircle, MapPin as MapIcon, MailIcon, Play
 import { useToast } from '@/hooks/use-toast';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
+import { triggerRefresh } from '@/lib/revalidateUtils';
 import type { AppSettings, DayAvailability } from '@/types/firestore'; 
 import { defaultAppSettings } from '@/config/appDefaults'; 
 import PlatformSettingsForm from '@/components/admin/PlatformSettingsForm';
@@ -153,7 +154,7 @@ export default function AdminSettingsPage() {
   const handleSaveSettings = async (sectionName: string) => {
     setIsSaving(true);
     
-    let settingsToSave: AppSettings = {
+    const settingsToSave: AppSettings = {
       ...defaultAppSettings, 
       ...settings, 
       timeSlotSettings: { 
@@ -183,6 +184,9 @@ export default function AdminSettingsPage() {
     try {
         const settingsDocRef = doc(db, APP_CONFIG_COLLECTION, APP_CONFIG_DOC_ID);
         await setDoc(settingsDocRef, settingsToSave, { merge: true }); 
+        await triggerRefresh('app-settings');
+        await triggerRefresh('global-cache');
+        await triggerRefresh('sitemap');
         
         toast({
             title: "Settings Saved",
@@ -268,25 +272,42 @@ export default function AdminSettingsPage() {
       </Card>
 
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 sm:grid-cols-5 mb-6">
-          <TabsTrigger value="general">
-            <DollarSign className="mr-2 h-4 w-4" /> General
-          </TabsTrigger>
-          <TabsTrigger value="payment">
-            <CreditCard className="mr-2 h-4 w-4" /> Payment
-          </TabsTrigger>
-           <TabsTrigger value="provider">
-            <Users className="mr-2 h-4 w-4" /> Provider
-          </TabsTrigger>
-          <TabsTrigger value="slots">
-            <Clock className="mr-2 h-4 w-4" /> Time Slots
-          </TabsTrigger>
-           <TabsTrigger value="cancellation">
-            <Ban className="mr-2 h-4 w-4" /> Cancellation
-          </TabsTrigger>
-        </TabsList>
+        <div className="relative mb-6">
+          <TabsList className="h-12 w-full justify-start gap-2 bg-transparent p-0 overflow-x-auto no-scrollbar flex-nowrap border-b border-border rounded-none">
+            <TabsTrigger 
+              value="general"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <DollarSign className="mr-2 h-4 w-4" /> General
+            </TabsTrigger>
+            <TabsTrigger 
+              value="payment"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <CreditCard className="mr-2 h-4 w-4" /> Payment
+            </TabsTrigger>
+            <TabsTrigger 
+              value="provider"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <Users className="mr-2 h-4 w-4" /> Provider
+            </TabsTrigger>
+            <TabsTrigger 
+              value="slots"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <Clock className="mr-2 h-4 w-4" /> Time Slots
+            </TabsTrigger>
+            <TabsTrigger 
+              value="cancellation"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <Ban className="mr-2 h-4 w-4" /> Cancellation
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
-        <TabsContent value="general">
+        <TabsContent value="general" className="mt-0 focus-visible:outline-none">
           <Card>
             <CardHeader>
               <CardTitle>General Settings</CardTitle>

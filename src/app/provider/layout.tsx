@@ -58,7 +58,13 @@ export default function ProviderLayout({ children }: PropsWithChildren) {
   const pathname = usePathname();
   const router = useRouter();
   const { showLoading, hideLoading } = useLoading();
-  const [isProviderApproved, setIsProviderApproved] = useState<boolean | null>(null);
+  const [isProviderApproved, setIsProviderApproved] = useState<boolean | null>(() => {
+    if (typeof window !== 'undefined') {
+      const cached = sessionStorage.getItem(`provider_approved_${providerUser?.uid}`);
+      return cached === 'true' ? true : cached === 'false' ? false : null;
+    }
+    return null;
+  });
   const [isCheckingApproval, setIsCheckingApproval] = useState(false); 
 
   const { count: unreadProviderNotificationsCount, isLoading: isLoadingProviderNotifications } = useUnreadNotificationsCount(providerUser?.uid); 
@@ -86,6 +92,17 @@ export default function ProviderLayout({ children }: PropsWithChildren) {
       document.head.appendChild(newManifestLink);
     }
   }, []);
+
+  // Update cached value when providerUser changes
+  useEffect(() => {
+    if (providerUser?.uid) {
+      const cached = sessionStorage.getItem(`provider_approved_${providerUser.uid}`);
+      if (cached === 'true') setIsProviderApproved(true);
+      else if (cached === 'false') setIsProviderApproved(false);
+    } else {
+      setIsProviderApproved(null);
+    }
+  }, [providerUser?.uid]);
 
   useEffect(() => {
     if (!providerUser?.uid || authIsLoading || !isProviderApproved) return;
@@ -175,46 +192,55 @@ export default function ProviderLayout({ children }: PropsWithChildren) {
 
   useEffect(() => {
     const checkProviderStatus = async () => {
-      if (providerUser && !authIsLoading) { 
-        setIsCheckingApproval(true); 
-        try {
-          const appDocRef = doc(db, PROVIDER_APPLICATION_COLLECTION, providerUser.uid);
-          const docSnap = await getDoc(appDocRef);
-          if (docSnap.exists()) {
-            const appData = docSnap.data() as ProviderApplication;
-            if (appData.status === 'approved') {
-              setIsProviderApproved(true);
-            } else {
-              setIsProviderApproved(false);
-              if (pathname !== '/provider-registration') { 
-                toast({ title: "Access Denied", description: "Your provider application is not yet approved or has been rejected.", variant: "destructive" });
-                router.push('/');
-              }
-            }
+      if (!providerUser || authIsLoading) return;
+
+      // If we already know the status, don't show loading or fetch again
+      if (isProviderApproved !== null) {
+        // Immediate redirection if not approved and on a protected page
+        if (isProviderApproved === false && pathname !== '/provider-registration') {
+            router.push('/');
+        }
+        return;
+      }
+
+      setIsCheckingApproval(true); 
+      try {
+        const appDocRef = doc(db, PROVIDER_APPLICATION_COLLECTION, providerUser.uid);
+        const docSnap = await getDoc(appDocRef);
+        if (docSnap.exists()) {
+          const appData = docSnap.data() as ProviderApplication;
+          if (appData.status === 'approved') {
+            setIsProviderApproved(true);
+            sessionStorage.setItem(`provider_approved_${providerUser.uid}`, 'true');
           } else {
             setIsProviderApproved(false);
-             if (pathname !== '/provider-registration') {
-                toast({ title: "Application Not Found", description: "Provider application not found. Please complete registration.", variant: "destructive" });
-                router.push('/provider-registration');
-             }
-          }
-        } catch (error) {
-          console.error("Error checking provider status:", error);
-          setIsProviderApproved(false);
-           if (pathname !== '/provider-registration') {
-              toast({ title: "Error", description: "Could not verify provider status.", variant: "destructive" });
+            sessionStorage.setItem(`provider_approved_${providerUser.uid}`, 'false');
+            if (pathname !== '/provider-registration') { 
+              toast({ title: "Access Denied", description: "Your provider application is not yet approved or has been rejected.", variant: "destructive" });
               router.push('/');
+            }
+          }
+        } else {
+          setIsProviderApproved(false);
+          sessionStorage.setItem(`provider_approved_${providerUser.uid}`, 'false');
+           if (pathname !== '/provider-registration') {
+              toast({ title: "Application Not Found", description: "Provider application not found. Please complete registration.", variant: "destructive" });
+              router.push('/provider-registration');
            }
-        } finally {
-          setIsCheckingApproval(false); 
         }
-      } else if (!authIsLoading && !providerUser) {
-        setIsProviderApproved(false); 
+      } catch (error) {
+        console.error("Error checking provider status:", error);
+        // On error, don't cache as false, just allow one retry if they navigate again
+         if (pathname !== '/provider-registration') {
+            toast({ title: "Error", description: "Could not verify provider status.", variant: "destructive" });
+            router.push('/');
+         }
+      } finally {
         setIsCheckingApproval(false); 
       }
     };
     checkProviderStatus();
-  }, [providerUser, authIsLoading, router, toast, pathname]);
+  }, [providerUser, authIsLoading, router, toast, pathname, isProviderApproved]);
 
   // Notification sound effect for provider
   useEffect(() => {
@@ -320,112 +346,114 @@ export default function ProviderLayout({ children }: PropsWithChildren) {
   
   return (
     <ProtectedRoute>
-      <SidebarProvider defaultOpen={true}>
-        <Sidebar collapsible="icon" variant="sidebar" className="border-r bg-card text-card-foreground">
-          <ProviderSidebarContent />
-        </Sidebar>
-        <SidebarInset className="bg-muted/30 overflow-x-hidden">
-          <header className="bg-background/95 backdrop-blur-xl sticky top-0 z-40 border-b border-border/40 transition-all duration-300 h-16 flex items-center justify-between px-4 sm:px-6">
-            <div className="flex items-center gap-3">
-              <SidebarTrigger className="hidden md:inline-flex text-muted-foreground hover:text-primary transition-colors" />
-              <div className="md:hidden flex items-center">
-                 <SidebarTrigger className="mr-2 text-muted-foreground hover:text-primary" />
-                 <Logo logoUrl={globalSettings?.logoUrl} websiteName={globalSettings?.websiteName} size="normal" />
+      <div className="flex flex-col min-h-screen">
+        <SidebarProvider defaultOpen={true}>
+          <Sidebar collapsible="icon" variant="sidebar" className="border-r bg-card text-card-foreground">
+            <ProviderSidebarContent />
+          </Sidebar>
+          <SidebarInset className="bg-muted/30 overflow-x-hidden flex-grow">
+            <header className="bg-background/95 backdrop-blur-xl sticky top-0 z-40 border-b border-border/40 transition-all duration-300 h-16 flex items-center justify-between px-4 sm:px-6">
+              <div className="flex items-center gap-3">
+                <SidebarTrigger className="hidden md:inline-flex text-muted-foreground hover:text-primary transition-colors" />
+                <div className="md:hidden flex items-center">
+                   <SidebarTrigger className="mr-2 text-muted-foreground hover:text-primary" />
+                   <Logo logoUrl={globalSettings?.logoUrl} websiteName={globalSettings?.websiteName} size="normal" />
+                </div>
+                <h1 className="hidden sm:block text-lg font-bold tracking-tight">Provider Panel</h1>
               </div>
-              <h1 className="hidden sm:block text-lg font-bold tracking-tight">Provider Panel</h1>
-            </div>
 
-            <div className="flex items-center gap-2">
-              <ThemeToggle />
-              
-              {providerUser && isProviderApproved && (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="relative rounded-full bg-muted/50 hover:bg-primary hover:text-primary-foreground shadow-none h-10 w-10 transition-all duration-300"
-                  aria-label="Provider Notifications"
-                  onClick={navigateToProviderNotifications}
-                >
-                  <Bell className="h-5 w-5" />
-                  {!isLoadingProviderNotifications && unreadProviderNotificationsCount > 0 && (
-                    <span className="absolute top-0 right-0 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white border-2 border-background">
-                      {unreadProviderNotificationsCount > 9 ? '9+' : unreadProviderNotificationsCount}
-                    </span>
-                  )}
-                </Button>
-              )}
+              <div className="flex items-center gap-2">
+                <ThemeToggle />
+                
+                {providerUser && isProviderApproved && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="relative rounded-full bg-muted/50 hover:bg-primary hover:text-primary-foreground shadow-none h-10 w-10 transition-all duration-300"
+                    aria-label="Provider Notifications"
+                    onClick={navigateToProviderNotifications}
+                  >
+                    <Bell className="h-5 w-5" />
+                    {!isLoadingProviderNotifications && unreadProviderNotificationsCount > 0 && (
+                      <span className="absolute top-0 right-0 flex h-4 w-4 items-center justify-center rounded-full bg-red-600 text-[10px] font-bold text-white border-2 border-background">
+                        {unreadProviderNotificationsCount > 9 ? '9+' : unreadProviderNotificationsCount}
+                      </span>
+                    )}
+                  </Button>
+                )}
 
-              {providerUser && (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <Button variant="ghost" className="relative flex items-center gap-2.5 h-11 px-2 pr-3 rounded-full border border-border/40 bg-card hover:bg-muted/50 hover:border-primary/20 transition-all duration-300 shadow-sm group">
-                      <Avatar className="h-8 w-8 border-2 border-primary/20 group-hover:border-primary transition-colors">
-                        <AvatarImage src={providerUser.photoURL || undefined} alt={providerUser.displayName || providerUser.email || "Provider"} />
-                        <AvatarFallback className="bg-primary/10 text-primary font-bold">
-                          {providerUser.email ? providerUser.email[0].toUpperCase() : <UserCircle size={20} />}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div className="hidden lg:flex flex-col items-start leading-none gap-1">
-                         <span className="text-xs font-bold truncate max-w-[100px]">{providerUser.displayName || "Provider"}</span>
-                         <span className="text-[9px] font-medium text-muted-foreground uppercase tracking-widest">Technician</span>
-                      </div>
-                      <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
-                    </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="w-64 mt-2 rounded-2xl p-2 shadow-2xl border-border/40" align="end" forceMount>
-                    <DropdownMenuLabel className="font-normal p-4">
-                      <div className="flex flex-col space-y-2">
-                        <p className="text-base font-bold leading-none">{providerUser.displayName || "Provider"}</p>
-                        <p className="text-xs leading-none text-muted-foreground truncate">
-                          {providerUser.email}
-                        </p>
-                      </div>
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator className="mx-2" />
-                    <div className="py-2">
-                      <DropdownMenuItem asChild className="rounded-xl px-4 py-3 cursor-pointer">
-                        <Link href="/provider/profile" onClick={() => showLoading()}>
-                          <div className="bg-primary/10 p-2 rounded-lg mr-3 text-primary">
-                            <UserCircle className="h-4 w-4" />
-                          </div>
-                          <span className="font-medium">Profile & Settings</span>
-                        </Link>
-                      </DropdownMenuItem>
-                      <DropdownMenuItem onClick={handleChangePassword} className="rounded-xl px-4 py-3 cursor-pointer">
-                        <div className="bg-muted p-2 rounded-lg mr-3">
-                          <KeyRound className="h-4 w-4" />
+                {providerUser && (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="ghost" className="relative flex items-center gap-2.5 h-11 px-2 pr-3 rounded-full border border-border/40 bg-card hover:bg-muted/50 hover:border-primary/20 transition-all duration-300 shadow-sm group">
+                        <Avatar className="h-8 w-8 border-2 border-primary/20 group-hover:border-primary transition-colors">
+                          <AvatarImage src={providerUser.photoURL || undefined} alt={providerUser.displayName || providerUser.email || "Provider"} />
+                          <AvatarFallback className="bg-primary/10 text-primary font-bold">
+                            {providerUser.email ? providerUser.email[0].toUpperCase() : <UserCircle size={20} />}
+                          </AvatarFallback>
+                        </Avatar>
+                        <div className="hidden lg:flex flex-col items-start leading-none gap-1">
+                           <span className="text-xs font-bold truncate max-w-[100px]">{providerUser.displayName || "Provider"}</span>
+                           <span className="text-[9px] font-medium text-muted-foreground uppercase tracking-widest">Technician</span>
                         </div>
-                        <span className="font-medium">Change Password</span>
-                      </DropdownMenuItem>
-                    </div>
-                    <DropdownMenuSeparator className="mx-2" />
-                    <DropdownMenuItem onClick={() => { showLoading(); handleLogoutAuth(); }} className="rounded-xl px-4 py-3 cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10">
-                      <div className="bg-destructive/10 p-2 rounded-lg mr-3">
-                        <LogOut className="h-4 w-4" />
+                        <ChevronDown className="h-3.5 w-3.5 text-muted-foreground group-hover:text-primary transition-colors" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent className="w-64 mt-2 rounded-2xl p-2 shadow-2xl border-border/40" align="end" forceMount>
+                      <DropdownMenuLabel className="font-normal p-4">
+                        <div className="flex flex-col space-y-2">
+                          <p className="text-base font-bold leading-none">{providerUser.displayName || "Provider"}</p>
+                          <p className="text-xs leading-none text-muted-foreground truncate">
+                            {providerUser.email}
+                          </p>
+                        </div>
+                      </DropdownMenuLabel>
+                      <DropdownMenuSeparator className="mx-2" />
+                      <div className="py-2">
+                        <DropdownMenuItem asChild className="rounded-xl px-4 py-3 cursor-pointer">
+                          <Link href="/provider/profile" onClick={() => showLoading()}>
+                            <div className="bg-primary/10 p-2 rounded-lg mr-3 text-primary">
+                              <UserCircle className="h-4 w-4" />
+                            </div>
+                            <span className="font-medium">Profile & Settings</span>
+                          </Link>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={handleChangePassword} className="rounded-xl px-4 py-3 cursor-pointer">
+                          <div className="bg-muted p-2 rounded-lg mr-3">
+                            <KeyRound className="h-4 w-4" />
+                          </div>
+                          <span className="font-medium">Change Password</span>
+                        </DropdownMenuItem>
                       </div>
-                      <span className="font-medium">Sign out</span>
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                      <DropdownMenuSeparator className="mx-2" />
+                      <DropdownMenuItem onClick={() => { showLoading(); handleLogoutAuth(); }} className="rounded-xl px-4 py-3 cursor-pointer text-destructive focus:text-destructive focus:bg-destructive/10">
+                        <div className="bg-destructive/10 p-2 rounded-lg mr-3">
+                          <LogOut className="h-4 w-4" />
+                        </div>
+                        <span className="font-medium">Sign out</span>
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                )}
+              </div>
+            </header>
+            <main className={cn("p-2 sm:p-4 md:p-6 relative", { "pb-20": isMobile })}>
+              <Suspense fallback={<ProviderPageLoader />}>
+                {children}
+              </Suspense>
+              {newJobPopupDetails && (
+                <NewJobProviderPopup
+                  isOpen={showNewJobPopup}
+                  bookingDocId={newJobPopupDetails.bookingDocId}
+                  bookingHumanId={newJobPopupDetails.bookingHumanId}
+                  onClose={(markAsRead) => handleCloseNewJobPopup(markAsRead, newJobPopupDetails.notificationId)}
+                />
               )}
-            </div>
-          </header>
-          <main className={cn("p-2 sm:p-4 md:p-6 relative", { "pb-20": isMobile })}>
-            <Suspense fallback={<ProviderPageLoader />}>
-              {children}
-            </Suspense>
-            {newJobPopupDetails && (
-              <NewJobProviderPopup
-                isOpen={showNewJobPopup}
-                bookingDocId={newJobPopupDetails.bookingDocId}
-                bookingHumanId={newJobPopupDetails.bookingHumanId}
-                onClose={(markAsRead) => handleCloseNewJobPopup(markAsRead, newJobPopupDetails.notificationId)}
-              />
-            )}
-          </main>
-           {isMobile && isProviderApproved && <ProviderBottomNavigationBar />}
-        </SidebarInset>
-      </SidebarProvider>
+            </main>
+          </SidebarInset>
+          {isMobile && isProviderApproved && <ProviderBottomNavigationBar />}
+        </SidebarProvider>
+      </div>
     </ProtectedRoute>
   );
 }

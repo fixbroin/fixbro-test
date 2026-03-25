@@ -20,7 +20,7 @@ import type {
   AppSettings,
   DayAvailability
 } from '@/types/firestore';
-import { getCartEntries, type CartEntry } from '@/lib/cartManager';
+import { getActiveCheckoutEntries, type CartEntry } from '@/lib/cartManager';
 import { useToast } from '@/hooks/use-toast';
 import { useLoading } from '@/contexts/LoadingContext'; 
 import { useRouter, usePathname } from 'next/navigation';
@@ -55,6 +55,7 @@ export default function SchedulePage() {
   const [selectedTimeSlot, setSelectedTimeSlot] = useState<string | undefined>();
   const [isMounted, setIsMounted] = useState(false);
   const [isLoadingSlotsAndConfig, setIsLoadingSlotsAndConfig] = useState(true); 
+  const [isFetchingSlots, setIsFetchingSlots] = useState(false);
   const [isSearchingForNextDay, setIsSearchingForNextDay] = useState(false);
   const [dataFetchError, setDataFetchError] = useState<string | null>(null);
 
@@ -74,7 +75,7 @@ export default function SchedulePage() {
 
   const fetchAvailableSlots = useCallback(async (date: Date) => {
     try {
-        const cartEntries = getCartEntries();
+        const cartEntries = getActiveCheckoutEntries();
         const response = await fetch('/api/checkout/available-slots', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -137,6 +138,7 @@ export default function SchedulePage() {
     if (!selectedDate || isSearchingForNextDay) return;
     
     const runSlotCalculation = async () => {
+        setIsFetchingSlots(true);
         try {
             const slots = await fetchAvailableSlots(selectedDate);
             setAvailableTimeSlots(slots);
@@ -152,7 +154,7 @@ export default function SchedulePage() {
                 });
 
                 setIsSearchingForNextDay(true);
-                let nextDay = new Date(selectedDate);
+                const nextDay = new Date(selectedDate);
                 let found = false;
 
                 // Small delay before searching and showing next toast to let user process the first one
@@ -182,6 +184,8 @@ export default function SchedulePage() {
             }
         } catch (error) {
             setDataFetchError("Failed to load available slots. Please try again.");
+        } finally {
+            setIsFetchingSlots(false);
         }
     };
     runSlotCalculation();
@@ -332,10 +336,12 @@ export default function SchedulePage() {
                       transition={{ duration: 0.2 }}
                       className="h-full"
                     >
-                      {isSearchingForNextDay ? (
+                      {isSearchingForNextDay || isFetchingSlots ? (
                         <div className="flex flex-col items-center justify-center py-20 text-center space-y-4">
                            <Loader2 className="h-10 w-10 text-primary animate-spin" />
-                           <p className="text-muted-foreground font-medium">Finding the next available day...</p>
+                           <p className="text-muted-foreground font-medium">
+                             {isSearchingForNextDay ? "Finding the next available day..." : "Checking available slots..."}
+                           </p>
                         </div>
                       ) : availableTimeSlots.length > 0 ? (
                         <div className="space-y-4">

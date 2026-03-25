@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
-import { Download, X, Share, PlusSquare, Smartphone, Monitor, Info } from 'lucide-react';
+import { Download, X, Share, PlusSquare, Smartphone } from 'lucide-react';
 import { useIsMobile } from '@/hooks/use-mobile';
+import { usePathname } from 'next/navigation';
 import AppImage from '@/components/ui/AppImage';
 import {
   Dialog,
@@ -12,7 +13,6 @@ import {
   DialogTitle,
   DialogDescription,
   DialogFooter,
-  DialogClose,
 } from "@/components/ui/dialog";
 
 // Extend Event type to include PWA-specific properties
@@ -32,10 +32,27 @@ const PwaInstallButton = () => {
   const [isAppInstalled, setIsAppInstalled] = useState(false);
   const [showIosGuide, setShowIosInstruction] = useState(false);
   const [isIos, setIsIos] = useState(false);
+  const [isMinimized, setIsMinimized] = useState(false);
   
   const isMobile = useIsMobile();
+  const pathname = usePathname();
   const DISMISS_KEY = 'pwa_install_prompt_dismissed_v2';
 
+  // Determine which app we are installing
+  const appInfo = {
+    name: "Wecanfix App",
+    desc: "Faster booking & real-time updates"
+  };
+
+  if (pathname.startsWith('/admin')) {
+    appInfo.name = "Wecanfix Admin";
+    appInfo.desc = "Manage orders & providers";
+  } else if (pathname.startsWith('/provider')) {
+    appInfo.name = "Wecanfix Provider";
+    appInfo.desc = "Manage your jobs & earnings";
+  }
+
+  // 1. Core initialization and event listener
   useEffect(() => {
     setIsMounted(true);
     
@@ -44,20 +61,14 @@ const PwaInstallButton = () => {
       setIsDismissed(true);
     }
     
-    // Check if the app is already installed
-    if (window.matchMedia('(display-mode: standalone)').matches || (window.navigator as any).standalone === true) {
-      setIsAppInstalled(true);
-    }
+    // Check standalone mode
+    const isStandalone = window.matchMedia('(display-mode: standalone)').matches || 
+                        (window.navigator as any).standalone === true;
+    if (isStandalone) setIsAppInstalled(true);
 
-    // Check if iOS
+    // Check iOS
     const userAgent = window.navigator.userAgent.toLowerCase();
-    const isIosDevice = /iphone|ipad|ipod/.test(userAgent);
-    setIsIos(isIosDevice);
-
-  }, []);
-
-  useEffect(() => {
-    if (!isMounted) return;
+    setIsIos(/iphone|ipad|ipod/.test(userAgent));
 
     const handleBeforeInstallPrompt = (e: Event) => {
       e.preventDefault();
@@ -65,11 +76,21 @@ const PwaInstallButton = () => {
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+  }, []);
 
-    return () => {
-      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
-    };
-  }, [isMounted]);
+  // 2. Timer logic for minimizing the mobile banner
+  useEffect(() => {
+    if (!isMounted || isAppInstalled || isDismissed || isMinimized || !isMobile) return;
+    
+    // Banner is visible, start the 10s countdown to move it to the side
+    if (installPrompt || isIos) {
+        const timer = setTimeout(() => {
+            setIsMinimized(true);
+        }, 10000);
+        return () => clearTimeout(timer);
+    }
+  }, [isMounted, isAppInstalled, isDismissed, isMobile, installPrompt, isIos, isMinimized]);
 
   const handleInstallClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -104,11 +125,18 @@ const PwaInstallButton = () => {
       return null;
   }
 
-  // --- MOBILE STICKY BANNER UI ---
+  // --- MOBILE UI (Banner -> Floating Badge) ---
   if (isMobile) {
       return (
         <>
-            <div className="fixed bottom-20 left-4 right-4 z-[100] animate-in fade-in slide-in-from-bottom-10 duration-500">
+            {/* LARGE BANNER (Initial State) */}
+            <div 
+                className={`fixed bottom-20 left-4 right-4 z-[100] transition-all duration-700 ease-in-out transform ${
+                    isMinimized 
+                    ? 'opacity-0 translate-y-20 pointer-events-none scale-50' 
+                    : 'opacity-100 translate-y-0 scale-100'
+                }`}
+            >
                 <div className="bg-card border-2 border-primary/20 shadow-2xl rounded-2xl p-4 flex items-center gap-4 relative">
                     <button 
                         onClick={handleDismiss}
@@ -122,14 +150,39 @@ const PwaInstallButton = () => {
                     </div>
 
                     <div className="flex-grow min-w-0">
-                        <h4 className="text-sm font-bold text-foreground">Install Wecanfix App</h4>
-                        <p className="text-[10px] text-muted-foreground line-clamp-1">Faster booking & real-time updates</p>
+                        <h4 className="text-sm font-bold text-foreground">Install {appInfo.name}</h4>
+                        <p className="text-[10px] text-muted-foreground line-clamp-1">{appInfo.desc}</p>
                     </div>
 
                     <Button size="sm" onClick={handleInstallClick} className="rounded-full px-5 font-bold shadow-lg shadow-primary/20">
                         {isIos ? "Setup" : "Install"}
                     </Button>
                 </div>
+            </div>
+
+            {/* MINIMIZED SIDE BADGE (After 10 Seconds) */}
+            <div 
+                onClick={handleInstallClick}
+                className={`fixed top-[40%] right-0 z-[100] transition-all duration-700 ease-in-out transform flex items-center bg-primary text-white shadow-2xl rounded-l-xl p-2 cursor-pointer ${
+                    isMinimized 
+                    ? 'opacity-100 translate-x-0' 
+                    : 'opacity-0 translate-x-20 pointer-events-none'
+                }`}
+            >
+                <div className="flex flex-col items-center gap-1">
+                    <Download size={18} className="animate-bounce" />
+                    <span className="text-[10px] font-bold uppercase tracking-tighter [writing-mode:vertical-lr] rotate-180">Install</span>
+                </div>
+                
+                <button 
+                    onClick={(e) => {
+                        e.stopPropagation();
+                        handleDismiss(e);
+                    }}
+                    className="absolute -top-2 -left-2 bg-destructive text-white rounded-full p-0.5 border-2 border-white shadow-md"
+                >
+                    <X size={10} />
+                </button>
             </div>
 
             {/* iOS Installation Guide */}

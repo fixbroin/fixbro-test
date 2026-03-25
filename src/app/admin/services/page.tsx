@@ -117,6 +117,8 @@ export default function AdminServicesPage() {
         setServices(prev => prev.map(s => s.id === service.id ? { ...s, isActive: !s.isActive } : s));
         toast({ title: "Status Updated", description: `Service "${service.name}" ${!service.isActive ? "enabled" : "disabled"}.` });
         await triggerRefresh('services');
+        await triggerRefresh('sitemap');
+        await triggerRefresh('global-cache');
     } catch (error) {
         toast({ title: "Error", description: "Could not update status.", variant: "destructive" });
     } finally {
@@ -134,6 +136,8 @@ export default function AdminServicesPage() {
         setServices(prev => prev.map(s => s.id === service.id ? { ...s, allowPayLater: !service.allowPayLater } : s));
         toast({ title: "Pay Later Updated", description: `Pay later for "${service.name}" ${!service.allowPayLater ? "enabled" : "disabled"}.` });
         await triggerRefresh('services');
+        await triggerRefresh('sitemap');
+        await triggerRefresh('global-cache');
     } catch (error) {
         toast({ title: "Error", description: "Could not update pay later status.", variant: "destructive" });
     } finally {
@@ -156,6 +160,8 @@ export default function AdminServicesPage() {
       }
       await deleteDoc(serviceDocRef);
       await triggerRefresh('services'); // SmartSync: Invalidate cache
+      await triggerRefresh('sitemap');
+      await triggerRefresh('global-cache');
       setServices(prev => prev.filter(serv => serv.id !== serviceId));
       toast({ title: "Success", description: "Service deleted successfully." });
     } catch (error) {
@@ -177,34 +183,34 @@ export default function AdminServicesPage() {
       description: data.description,
       price: data.price,
       isTaxInclusive: data.isTaxInclusive, 
-      discountedPrice: data.discountedPrice === null ? undefined : data.discountedPrice,
+      discountedPrice: data.discountedPrice === null ? null : data.discountedPrice,
       hasPriceVariants: data.hasPriceVariants,
       priceVariants: data.priceVariants,
       rating: Number(data.rating || 0), 
       reviewCount: Number(data.reviewCount || 0),
       hasMinQuantity: data.hasMinQuantity,
-      minQuantity: data.hasMinQuantity ? Number(data.minQuantity || 0) : undefined,
-      maxQuantity: data.maxQuantity === null ? undefined : Number(data.maxQuantity),
+      minQuantity: data.hasMinQuantity ? Number(data.minQuantity || 0) : null,
+      maxQuantity: data.maxQuantity === null ? null : Number(data.maxQuantity),
       isActive: data.isActive === undefined ? true : data.isActive,
       imageUrl: data.imageUrl || "", 
       imageHint: data.imageHint || "", 
-      shortDescription: data.shortDescription === null ? undefined : data.shortDescription,
-      fullDescription: data.fullDescription === null ? undefined : data.fullDescription, 
+      shortDescription: data.shortDescription === null ? null : data.shortDescription,
+      fullDescription: data.fullDescription === null ? null : data.fullDescription, 
       serviceHighlights: data.serviceHighlights || [],
       taxId: data.taxId, 
       taxName: selectedTax?.taxName, 
       taxPercent: selectedTax?.taxPercent,
-      h1_title: data.h1_title || undefined, 
-      seo_title: data.seo_title || undefined,
-      seo_description: data.seo_description || undefined, 
-      seo_keywords: data.seo_keywords || undefined,
-      taskTimeValue: data.taskTimeValue,
-      taskTimeUnit: data.taskTimeUnit,
+      h1_title: data.h1_title || null, 
+      seo_title: data.seo_title || null,
+      seo_description: data.seo_description || null, 
+      seo_keywords: data.seo_keywords || null,
+      taskTimeValue: data.taskTimeValue === null ? null : data.taskTimeValue,
+      taskTimeUnit: data.taskTimeUnit === null ? null : data.taskTimeUnit,
       includedItems: data.includedItems || [],
       excludedItems: data.excludedItems || [],
       allowPayLater: data.allowPayLater,
       serviceFaqs: data.serviceFaqs || [],
-      membersRequired: data.membersRequired,
+      membersRequired: data.membersRequired === null ? null : data.membersRequired,
     };
 
     try {
@@ -219,7 +225,12 @@ export default function AdminServicesPage() {
         await addDoc(servicesCollectionRef, newServicePayload as FirestoreService); // Cast to ensure type compatibility for addDoc
         toast({ title: "Success", description: "Service added successfully." });
       }
-      await triggerRefresh('services'); // SmartSync: Invalidate cache
+      await triggerRefresh('services'); // SmartSync: Invalidate main services cache
+      if (data.slug) {
+        await triggerRefresh(`service-${data.slug}`); // Invalidate specific service page cache
+      }
+      await triggerRefresh('sitemap');
+      await triggerRefresh('global-cache');
       setIsFormOpen(false); setEditingService(null); await fetchData();
     } catch (error) {
       console.error("Error saving service: ", error);

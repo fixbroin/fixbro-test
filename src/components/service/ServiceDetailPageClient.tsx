@@ -62,7 +62,7 @@ const getPriceForNthUnit = (service: FirestoreService | ClientServiceData, n: nu
 
   const sortedVariants = [...service.priceVariants].sort((a, b) => a.fromQuantity - b.fromQuantity);
 
-  let applicableTier = sortedVariants.find(tier => {
+  const applicableTier = sortedVariants.find(tier => {
     const start = tier.fromQuantity;
     const end = tier.toQuantity ?? Infinity;
     return n >= start && n <= end;
@@ -360,7 +360,7 @@ export default function ServiceDetailPageClient({
 
   const updateCartAndShowToast = (newQuantity: number, action: 'added' | 'updated' | 'removed') => {
     if (!service) return;
-    let cartEntries = getCartEntries();
+    const cartEntries = getCartEntries();
     const existingEntryIndex = cartEntries.findIndex(entry => entry.serviceId === service.id);
     const oldQuantity = existingEntryIndex > -1 ? cartEntries[existingEntryIndex].quantity : 0;
     
@@ -445,7 +445,7 @@ export default function ServiceDetailPageClient({
     }
   }, [serviceSlug, currentPathname, showLoading, router]);
 
-  const formatTaskTime = (value?: number, unit?: 'hours' | 'minutes'): string | null => {
+  const formatTaskTime = (value?: number | null, unit?: 'hours' | 'minutes' | null): string | null => {
     if (value === undefined || value === null || !unit) return null;
     if (value <= 0) return null;
     return `${value} ${unit}`;
@@ -476,7 +476,7 @@ export default function ServiceDetailPageClient({
   const displayServiceImageUrl = service.imageUrl && service.imageUrl.trim() !== '' ? service.imageUrl : "/default-image.png";
   const aiHintValue = generateAiHint(service.imageHint, service.name);
   const taskTimeDisplay = formatTaskTime(service.taskTimeValue, service.taskTimeUnit);
-  const isAvailable = service.maxQuantity === undefined || service.maxQuantity > 0;
+  const isAvailable = service.maxQuantity === undefined || service.maxQuantity === null || service.maxQuantity > 0;
 
   return (
     <div className="container mx-auto px-2 sm:px-4 py-6 sm:py-8 pb-24">

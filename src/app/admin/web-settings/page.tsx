@@ -12,6 +12,7 @@ import { Settings2, Save, Loader2, AlertTriangle, Building, Image as ImageIcon, 
 import { useToast } from '@/hooks/use-toast';
 import { db, storage } from '@/lib/firebase';
 import { doc, getDoc, setDoc, Timestamp, collection, query, orderBy, onSnapshot } from "firebase/firestore";
+import { triggerRefresh } from '@/lib/revalidateUtils';
 import { ref as storageRefStandard, uploadBytesResumable, getDownloadURL, deleteObject } from "firebase/storage";
 import type { GlobalWebSettings, ContentPage } from '@/types/firestore';
 import NextImage from 'next/image';
@@ -263,6 +264,9 @@ export default function WebSettingsPage() {
         updatedAt: Timestamp.now(),
       };
       await setDoc(settingsDocRef, updateData, { merge: true });
+      await triggerRefresh('web-settings');
+      await triggerRefresh('global-cache');
+      await triggerRefresh('sitemap');
       setGlobalSettings(prev => ({ ...prev, ...updateData }));
       setOriginalGlobalSettings(prev => ({...prev, ...updateData}));
       toast({ title: "Success", description: "General information saved." });
@@ -347,7 +351,7 @@ export default function WebSettingsPage() {
     const originalDbUrl = originalGlobalSettings[currentDbUrlKey] as string | undefined;
     const currentManualUrl = globalSettings[currentDbUrlKey] as string | undefined;
     let finalImageUrl = currentManualUrl || "";
-    let finalImageHint = hintKey ? (generalInfoForm.getValues(hintKey) || "") : undefined;
+    const finalImageHint = hintKey ? (generalInfoForm.getValues(hintKey) || "") : undefined;
 
 
     try {
@@ -374,6 +378,9 @@ export default function WebSettingsPage() {
       }
 
       await setDoc(settingsDocRef, updateData, { merge: true });
+      await triggerRefresh('web-settings');
+      await triggerRefresh('global-cache');
+      await triggerRefresh('sitemap');
       
       setGlobalSettings(prev => ({ ...prev, ...updateData }));
       setOriginalGlobalSettings(prev => ({ ...prev, ...updateData }));
@@ -408,8 +415,8 @@ export default function WebSettingsPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>, assetType: 'logo' | 'favicon' | 'websiteIcon') => {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
-      let maxSizeMB = assetType === 'logo' ? 2 : (assetType === 'favicon' ? 0.5 : 1);
-      let expectedTypes = assetType === 'favicon' ? ["image/x-icon", "image/png", "image/svg+xml"] : ["image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"];
+      const maxSizeMB = assetType === 'logo' ? 2 : (assetType === 'favicon' ? 0.5 : 1);
+      const expectedTypes = assetType === 'favicon' ? ["image/x-icon", "image/png", "image/svg+xml"] : ["image/png", "image/jpeg", "image/gif", "image/svg+xml", "image/webp"];
       
       if (!expectedTypes.includes(file.type)) {
         toast({ title: "Invalid File Type", description: `Please select a valid image type (${expectedTypes.join(', ')}).`, variant: "destructive"});
@@ -478,6 +485,9 @@ export default function WebSettingsPage() {
         updatedAt: Timestamp.now(),
       };
       await setDoc(pageDocRef, pageData, { merge: true });
+      await triggerRefresh('web-settings');
+      await triggerRefresh('global-cache');
+      await triggerRefresh('sitemap');
       toast({ title: "Success", description: `${pageData.title} content saved.` });
       setPageImageFile(null);
     } catch (error) {
@@ -503,6 +513,9 @@ export default function WebSettingsPage() {
             updatedAt: Timestamp.now(),
         };
         await setDoc(settingsDocRef, updateData, { merge: true });
+        await triggerRefresh('web-settings');
+        await triggerRefresh('global-cache');
+        await triggerRefresh('sitemap');
         setGlobalSettings(prev => ({ ...prev, ...updateData }));
         setOriginalGlobalSettings(prev => ({...prev, ...updateData}));
         toast({ title: "Success", description: "Social media links saved." });
@@ -673,14 +686,36 @@ export default function WebSettingsPage() {
       </Card>
 
       <Tabs defaultValue="general" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 md:grid-cols-4 gap-2 mb-6">
-          <TabsTrigger value="general"><Building className="mr-2 h-4 w-4" />General Info</TabsTrigger>
-          <TabsTrigger value="branding"><ImageIcon className="mr-2 h-4 w-4" />Branding</TabsTrigger>
-          <TabsTrigger value="social_media"><ExternalLink className="mr-2 h-4 w-4" />Social Media</TabsTrigger>
-          <TabsTrigger value="content"><FileText className="mr-2 h-4 w-4" />Content Pages</TabsTrigger>
-        </TabsList>
+        <div className="relative mb-6">
+          <TabsList className="h-12 w-full justify-start gap-2 bg-transparent p-0 overflow-x-auto no-scrollbar flex-nowrap border-b border-border rounded-none">
+            <TabsTrigger 
+              value="general"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <Building className="mr-2 h-4 w-4" />General Info
+            </TabsTrigger>
+            <TabsTrigger 
+              value="branding"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <ImageIcon className="mr-2 h-4 w-4" />Branding
+            </TabsTrigger>
+            <TabsTrigger 
+              value="social_media"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <ExternalLink className="mr-2 h-4 w-4" />Social Media
+            </TabsTrigger>
+            <TabsTrigger 
+              value="content"
+              className="relative h-12 rounded-none border-b-2 border-transparent bg-transparent px-4 pb-3 pt-2 font-semibold text-muted-foreground shadow-none transition-none data-[state=active]:border-primary data-[state=active]:text-primary data-[state=active]:shadow-none whitespace-nowrap"
+            >
+              <FileText className="mr-2 h-4 w-4" />Content Pages
+            </TabsTrigger>
+          </TabsList>
+        </div>
 
-        <TabsContent value="general">
+        <TabsContent value="general" className="mt-0 focus-visible:outline-none">
           <Card>
             <CardHeader><CardTitle>General Information</CardTitle></CardHeader>
             <Form {...generalInfoForm}>

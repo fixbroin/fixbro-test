@@ -35,6 +35,17 @@ import type { HomepageData } from '@/lib/homepageUtils';
 import { LazySection } from '@/components/shared/LazySection';
 import CategoryCard from './CategoryCard';
 
+const isBot = (): boolean => {
+  if (typeof window === 'undefined') return true;
+  const botPatterns = [
+      'bot', 'crawler', 'spider', 'crawling', 'googlebot', 'bingbot', 'yandexbot', 
+      'slurp', 'duckduckbot', 'baiduspider', 'adsbot', 'mediapartners-google',
+      'lighthouse', 'gtmetrix', 'pingdom', 'facebookexternalhit', 'whatsapp', 'linkedinbot'
+  ];
+  const ua = navigator.userAgent.toLowerCase();
+  return botPatterns.some(pattern => ua.includes(pattern));
+};
+
 // Lazy load components
 const HeroCarousel = dynamic(() => import('@/components/home/HeroCarousel').then((mod) => mod.HeroCarousel), {
   loading: () => <Skeleton className="h-[180px] sm:h-[250px] md:h-[300px] lg:h-[400px] xl:h-[450px] w-full rounded-lg" />,
@@ -91,14 +102,27 @@ const ExploreByLocation = dynamic(() => import('@/components/shared/ExploreByLoc
     loading: () => <Skeleton className="h-64 w-full rounded-xl" />
 });
 
-const SectionHeader: React.FC<{ title: string; icon?: React.ReactNode; subtitle?: string; centered?: boolean }> = ({ title, icon, subtitle, centered = true }) => (
+const SectionHeader: React.FC<{ 
+  title: string; 
+  icon?: React.ReactNode; 
+  subtitle?: string; 
+  centered?: boolean;
+  isH1?: boolean;
+}> = ({ title, icon, subtitle, centered = true, isH1 = false }) => {
+  const TitleTag = isH1 ? 'h1' : 'h2';
+  return (
     <div className={cn("mb-8 md:mb-12", centered ? "text-center" : "text-left")}>
-        <h2 className={cn("text-2xl md:text-3xl font-headline font-semibold text-foreground flex items-center gap-2", centered ? "justify-center" : "justify-start")}>
+        <TitleTag className={cn(
+          "font-headline font-semibold text-foreground flex items-center gap-2", 
+          isH1 ? "text-2xl md:text-4xl" : "text-xl md:text-3xl",
+          centered ? "justify-center" : "justify-start"
+        )}>
             {icon} {title}
-        </h2>
+        </TitleTag>
         {subtitle && <p className="text-muted-foreground mt-2 text-sm md:text-base max-w-2xl mx-auto">{subtitle}</p>}
     </div>
-);
+  );
+};
 
 const FEATURES_CONFIG_COLLECTION = "webSettings";
 const FEATURES_CONFIG_DOC_ID = "featuresConfiguration";
@@ -160,7 +184,7 @@ const HomepageServiceCard: React.FC<{ service: FirestoreService }> = ({ service 
 
   
   const updateCart = (newQuantity: number) => {
-    let cartEntries = getCartEntries();
+    const cartEntries = getCartEntries();
     const existingEntryIndex = cartEntries.findIndex(entry => entry.serviceId === service.id);
     const oldQuantity = existingEntryIndex > -1 ? cartEntries[existingEntryIndex].quantity : 0;
     
@@ -203,7 +227,7 @@ const HomepageServiceCard: React.FC<{ service: FirestoreService }> = ({ service 
 
   const handleInitialAdd = (e: React.MouseEvent<HTMLButtonElement>) => {
     e.stopPropagation();
-    if (service.maxQuantity !== undefined && 1 > service.maxQuantity) {
+    if (service.maxQuantity !== undefined && service.maxQuantity !== null && 1 > service.maxQuantity) {
         toast({ title: "Unavailable", description: `This service is currently not available.`});
         return;
     }
@@ -211,7 +235,7 @@ const HomepageServiceCard: React.FC<{ service: FirestoreService }> = ({ service 
     handleQuantityChange(newQuantity);
   };
 
-  const formatTaskTime = (value?: number, unit?: 'hours' | 'minutes'): string | null => {
+  const formatTaskTime = (value?: number | null, unit?: 'hours' | 'minutes' | null): string | null => {
     if (value === undefined || value === null || !unit) return null;
     if (value <= 0) return null;
     return `${value} ${unit}`;
@@ -226,7 +250,7 @@ const getPriceForNthUnit = (service: FirestoreService, n: number): number => {
 
   const sortedVariants = [...service.priceVariants].sort((a, b) => a.fromQuantity - b.fromQuantity);
 
-  let applicableTier = sortedVariants.find(tier => {
+  const applicableTier = sortedVariants.find(tier => {
     const start = tier.fromQuantity;
     const end = tier.toQuantity ?? Infinity;
     return n >= start && n <= end;
@@ -284,7 +308,7 @@ const getPriceDisplayInfo = (service: FirestoreService, quantity: number) => {
 
  const { mainPrice, priceSuffix, promoText } = getPriceDisplayInfo(service, quantity);
 
-const isAvailable = service.maxQuantity === undefined || service.maxQuantity > 0;
+const isAvailable = service.maxQuantity === undefined || service.maxQuantity === null || service.maxQuantity > 0;
   
   return (
     <Card onClick={handleClick} className="cursor-pointer h-full flex flex-col hover:shadow-lg transition-shadow ">
@@ -377,6 +401,9 @@ export default function HomePageClient({ citySlug, areaSlug, breadcrumbItems, in
   const { config: appConfig, isLoading: isLoadingAppSettings } = useApplicationConfig();
   const [isMounted, setIsMounted] = useState(false);
   const router = useRouter();
+  const pathname = usePathname();
+  const isAdmin = pathname?.startsWith('/admin');
+  const isVisitorBot = React.useRef(isBot());
   const [structuredData, setStructuredData] = useState<Record<string, any> | null>(() => getCache<Record<string, any>>('structuredData', true) || null);
   const [seoSettings, setSeoSettings] = useState<FirestoreSEOSettings | null>(() => initialData?.seoSettings || getCache<FirestoreSEOSettings>('seoSettings', true) || null);
   const [pageH1, setPageH1] = useState<string | undefined>(() => initialH1Title || initialData?.seoSettings.homepageH1 || getCache<string>('pageH1', true) || undefined);
@@ -396,6 +423,13 @@ export default function HomePageClient({ citySlug, areaSlug, breadcrumbItems, in
   const [citiesWithAreas, setCitiesWithAreas] = useState<FirestoreCity[]>(() => initialData?.citiesWithAreas || getCache<FirestoreCity[]>('citiesWithAreas', true) || []);
 
   const fetchPageSpecificData = useCallback(async () => {
+    // If it's a bot, we don't need to do extra SEO/LD+JSON fetches on client
+    // because the server already rendered the metadata and JSON-LD.
+    if (isVisitorBot.current && !isAdmin) {
+        setIsLoadingPageData(false);
+        return;
+    }
+
     const cachedH1 = getCache<string>('pageH1');
     const cachedSeoSettings = getCache<FirestoreSEOSettings>('seoSettings');
     const cachedStructuredData = getCache<Record<string, any>>('structuredData');
@@ -526,6 +560,15 @@ export default function HomePageClient({ citySlug, areaSlug, breadcrumbItems, in
   }, [citySlug, areaSlug, initialData, seoSettings, initialH1Title]);
 
   const setupRealtimeListeners = useCallback(() => {
+    // If it's a bot or not an admin, we don't need realtime listeners.
+    // The initialData from server is enough for the first render.
+    if (isVisitorBot.current || !isAdmin) {
+        setIsLoadingFeaturesConfig(false);
+        setIsLoadingPopular(false);
+        setIsLoadingRecent(false);
+        return () => {};
+    }
+
     // 1. Features Config Listener
     const configDocRef = doc(db, FEATURES_CONFIG_COLLECTION, FEATURES_CONFIG_DOC_ID);
     const unsubscribeConfig = onSnapshot(configDocRef, (docSnap) => {
@@ -589,6 +632,12 @@ export default function HomePageClient({ citySlug, areaSlug, breadcrumbItems, in
   const fetchCategoryWiseData = useCallback(async (currentFeaturesConfig: FeaturesConfiguration) => {
     if (!currentFeaturesConfig.showCategoryWiseServices) return;
     
+    // If we have initialData or it's a bot, we don't need to re-fetch this on client
+    if (initialData?.categoryWiseServices || isVisitorBot.current) {
+        setIsLoadingCategoryWise(false);
+        return;
+    }
+
     try {
         const enabledCategoryIds = Object.entries(currentFeaturesConfig.homepageCategoryVisibility || {})
             .filter(([, isVisible]) => isVisible)
@@ -643,7 +692,9 @@ export default function HomePageClient({ citySlug, areaSlug, breadcrumbItems, in
   }, [handleSimpleNavigation]);
 
   const displayHeroCarousel = !isLoadingAppSettings && (appConfig.enableHeroCarousel ?? true);
-  const finalH1 = pageH1 || seoSettings?.homepageH1 || 'Choose Your Service';
+  const finalH1 = pageH1 || initialH1Title || (citySlug || areaSlug 
+    ? `Professional Home Services in ${areaSlug || citySlug}`.replace(/-/g, ' ').replace(/\b\w/g, l => l.toUpperCase())
+    : "Discover Our Services");
   
   const renderAdsByPlacement = (placement: AdPlacement) => {
     const adsForPlacement = activeAds.filter(ad => ad.placement === placement);
@@ -740,6 +791,7 @@ export default function HomePageClient({ citySlug, areaSlug, breadcrumbItems, in
           <div className="container mx-auto px-4">
             <SectionHeader 
                 title={finalH1} 
+                isH1={true}
                 subtitle={`Discover a wide range of services to meet your needs${citySlug ? ` in ${citySlug.charAt(0).toUpperCase() + citySlug.slice(1).replace(/-/g, ' ')}` : ''}${areaSlug ? `, ${areaSlug.charAt(0).toUpperCase() + areaSlug.slice(1).replace(/-/g, ' ')}` : ''}.`}
             />
             <HomeCategoriesSection />

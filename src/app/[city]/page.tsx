@@ -11,8 +11,9 @@ import { getGlobalSEOSettings } from '@/lib/seoServerUtils';
 import { getBaseUrl } from '@/lib/config';
 import JsonLdScript from '@/components/shared/JsonLdScript';
 import { cache } from 'react';
+import { unstable_cache } from 'next/cache';
 
-export const revalidate = 3600; // Revalidate every hour
+export const revalidate = false;
 
 interface CityPageProps {
   params: Promise<{ city: string }>;
@@ -21,22 +22,28 @@ interface CityPageProps {
 const RESERVED_SLUGS = ['api', 'admin', 'provider', 'auth', 'static', '_next', 'favicon.ico'];
 
 const getCityData = cache(async (slug: string): Promise<FirestoreCity | null> => {
-  try {
-    if (slug.includes('.') || RESERVED_SLUGS.includes(slug)) {
-      return null;
-    }
-    const citiesRef = adminDb.collection('cities');
-    const q = citiesRef.where('slug', '==', slug).where('isActive', '==', true).limit(1);
-    const snapshot = await q.get();
-    if (snapshot.empty) {
+  return unstable_cache(
+    async () => {
+      try {
+        if (slug.includes('.') || RESERVED_SLUGS.includes(slug)) {
+          return null;
+        }
+        const citiesRef = adminDb.collection('cities');
+        const q = citiesRef.where('slug', '==', slug).where('isActive', '==', true).limit(1);
+        const snapshot = await q.get();
+        if (snapshot.empty) {
+            return null;
+        }
+        const doc = snapshot.docs[0];
+        return { id: doc.id, ...doc.data() } as FirestoreCity;
+      } catch (error) {
+        console.error(`[CityPage] Error fetching city data for page:`, error);
         return null;
-    }
-    const doc = snapshot.docs[0];
-    return { id: doc.id, ...doc.data() } as FirestoreCity;
-  } catch (error) {
-    console.error(`[CityPage] Error fetching city data for page:`, error);
-    return null;
-  }
+      }
+    },
+    [`city-data-${slug}`],
+    { revalidate: false, tags: ['cities', `city-${slug}`, 'global-cache'] }
+  )();
 });
 
 
@@ -57,7 +64,8 @@ export async function generateMetadata(
   const description = replacePlaceholders(cityData.metaDescription || seoSettings.cityPageDescriptionPattern, placeholderData) || `Trusted home services in ${cityData.name}.`;
   const keywords = replacePlaceholders(cityData.metaKeywords || seoSettings.cityPageKeywordsPattern, placeholderData).split(',').map(k => k.trim()).filter(k => k);
 
-  const ogImage = cityData.imageUrl || seoSettings.structuredDataImage || `${appBaseUrl}/default-image.png`;
+  const rawOgImage = cityData.imageUrl || seoSettings.structuredDataImage || `/default-image.png`;
+  const ogImage = rawOgImage.startsWith('http') ? rawOgImage : `${appBaseUrl}${rawOgImage.startsWith('/') ? '' : '/'}${rawOgImage}`;
 
   return {
     title: title,
@@ -74,7 +82,7 @@ export async function generateMetadata(
       title: title,
       description: description,
       url: `/${citySlug}`,
-      images: [{ url: ogImage }],
+      images: [{ url: ogImage, width: 1200, height: 630, alt: title }],
       type: 'website',
     },
   };
@@ -118,6 +126,9 @@ export default async function CityHomePage({ params }: CityPageProps) {
   const placeholderData = { cityName: cityData.name };
   const h1Title = replacePlaceholders(cityData.h1_title || seoSettings.cityPageH1Pattern, placeholderData) || `Best Professional Home Services in ${cityData.name}`;
 
+  const rawSchemaImage = cityData.imageUrl || seoSettings.structuredDataImage || `/android-chrome-512x512.png`;
+  const schemaImage = rawSchemaImage.startsWith('http') ? rawSchemaImage : `${appBaseUrl}${rawSchemaImage.startsWith('/') ? '' : '/'}${rawSchemaImage}`;
+
   const citySchema = {
     "@context": "https://schema.org",
     "@type": "LocalBusiness",
@@ -125,7 +136,7 @@ export default async function CityHomePage({ params }: CityPageProps) {
     "url": `${appBaseUrl}/${citySlug}`,
     "description": cityData.metaDescription || `Professional home services in ${cityData.name}. Trusted experts by Wecanfix.`,
     "telephone": seoSettings.structuredDataTelephone,
-    "image": cityData.imageUrl || seoSettings.structuredDataImage || `${appBaseUrl}/android-chrome-512x512.png`,
+    "image": schemaImage,
     "address": {
       "@type": "PostalAddress",
       "addressLocality": cityData.name,

@@ -8,8 +8,9 @@ import { Settings, Save, Loader2 } from "lucide-react";
 import { useToast } from '@/hooks/use-toast';
 import { db } from '@/lib/firebase';
 import { doc, getDoc, setDoc, Timestamp } from "firebase/firestore";
-import type { AppSettings, PlatformFeeSetting } from '@/types/firestore';
-import { defaultAppSettings } from '@/config/appDefaults';
+import { triggerRefresh } from '@/lib/revalidateUtils';
+import type { AppSettings, PlatformFeeSetting } from '@/types/firestore'; 
+import { defaultAppSettings } from '@/config/appDefaults'; 
 import PlatformSettingsForm from '@/components/admin/PlatformSettingsForm';
 
 const APP_CONFIG_COLLECTION = "webSettings";
@@ -54,6 +55,9 @@ export default function AdminPlatformSettingsPage() {
         { platformFees: updatedFees, updatedAt: Timestamp.now() }, 
         { merge: true }
       );
+      await triggerRefresh('app-settings');
+      await triggerRefresh('global-cache');
+      await triggerRefresh('sitemap');
       setPlatformFees(updatedFees); // Update local state to reflect saved data
       toast({
         title: "Platform Fees Saved",

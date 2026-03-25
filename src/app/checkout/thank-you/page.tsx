@@ -9,7 +9,7 @@ import CheckoutStepper from '@/components/checkout/CheckoutStepper';
 import { db, auth } from '@/lib/firebase';
 import { collection, addDoc, Timestamp, doc, getDoc, runTransaction, query, where, getDocs, limit, updateDoc, deleteDoc, setDoc } from "firebase/firestore";
 import type { FirestoreBooking, BookingServiceItem, FirestoreService, FirestorePromoCode, AppSettings, AppliedPlatformFeeItem, FirestoreNotification, BookingStatus, MarketingAutomationSettings, MarketingSettings } from '@/types/firestore';
-import { getCartEntries, saveCartEntries, syncCartToFirestore } from '@/lib/cartManager';
+import { getActiveCheckoutEntries, removeCheckedOutItemsFromCart } from '@/lib/cartManager';
 import { useToast } from '@/hooks/use-toast';
 import { useAuth } from '@/hooks/useAuth';
 import { sendBookingConfirmationEmail, type BookingConfirmationEmailInput } from '@/ai/flows/sendBookingEmailFlow';
@@ -51,17 +51,13 @@ const getBasePriceForInvoice = (displayedPrice: number, isTaxInclusive: boolean,
     return (displayedPrice * 100) / (100 + taxPercent);
 };
 
-const clearLocalStorageItems = (uid?: string) => {
-    if (uid) {
-        try {
-            saveCartEntries([]);
-            syncCartToFirestore(uid, []).catch(err => console.error("Error syncing empty cart after booking:", err));
-        } catch (e) {
-            console.error("Error clearing cart after booking:", e);
-        }
+const clearLocalStorageItems = async (uid?: string) => {
+    try {
+        await removeCheckedOutItemsFromCart(uid);
+    } catch (e) {
+        console.error("Error clearing cart after booking:", e);
     }
     if (typeof window !== 'undefined') {
-        window.dispatchEvent(new StorageEvent('storage', { key: 'wecanfixUserCart' }));
         localStorage.removeItem('wecanfixScheduledDate');
         localStorage.removeItem('wecanfixScheduledTimeSlot');
         localStorage.removeItem('wecanfixEstimatedEndTime');
@@ -88,7 +84,7 @@ const getPriceForNthUnit = (service: FirestoreService, n: number): number => {
     return service.discountedPrice ?? service.price;
   }
   const sortedVariants = [...service.priceVariants].sort((a, b) => a.fromQuantity - b.fromQuantity);
-  let applicableTier = sortedVariants.find(tier => {
+  const applicableTier = sortedVariants.find(tier => {
     const start = tier.fromQuantity;
     const end = tier.toQuantity ?? Infinity;
     return n >= start && n <= end;
@@ -200,13 +196,13 @@ export default function ThankYouPage() {
             console.error("Error during cancellation payment verification/update:", error);
             toast({ title: "Payment Error", description: (error as Error).message || "Failed to verify payment. Please contact support.", variant: "destructive" });
         } finally {
-            clearLocalStorageItems(currentUser?.uid);
+            await clearLocalStorageItems(currentUser?.uid);
             setIsLoadingPage(false);
         }
         return;
       }
       
-      const cartEntriesFromStorage = getCartEntries();
+      const cartEntriesFromStorage = getActiveCheckoutEntries();
       if (cartEntriesFromStorage.length === 0) {
         toast({ title: "Booking Processed", description: "Redirecting to My Bookings.", variant: "default" });
         router.push('/my-bookings');
@@ -288,17 +284,17 @@ export default function ThankYouPage() {
         const resolvedServiceItems = (await Promise.all(serviceItemsPromises)).filter(item => item !== null) as (BookingServiceItem & {_basePriceForBooking: number})[];
         if (resolvedServiceItems.length !== cartEntriesFromStorage.length) { toast({title: "Error", description: "Some cart services not found. Booking aborted.", variant: "destructive"}); setIsLoadingPage(false); router.push('/cart'); return; }
 
-        let baseSubTotalForBooking = resolvedServiceItems.reduce((sum, item) => sum + (item._basePriceForBooking * item.quantity), 0);
+        const baseSubTotalForBooking = resolvedServiceItems.reduce((sum, item) => sum + (item._basePriceForBooking * item.quantity), 0);
         
         let baseVisitingChargeForBooking = 0; 
         const subtotalForVcPolicyCheck = sumOfDisplayedItemPrices - (bookingDiscountAmount || 0);
         if (appConfig.enableMinimumBookingPolicy && typeof appConfig.minimumBookingAmount === 'number' && typeof appConfig.visitingChargeAmount === 'number') { if (subtotalForVcPolicyCheck > 0 && subtotalForVcPolicyCheck < appConfig.minimumBookingAmount) { baseVisitingChargeForBooking = getBasePriceForInvoice(appConfig.visitingChargeAmount, !!appConfig.isVisitingChargeTaxInclusive, appConfig.visitingChargeTaxPercent); } }
         
-        let totalItemTax = resolvedServiceItems.reduce((sum, item) => sum + (item.taxAmountForItem || 0), 0);
+        const totalItemTax = resolvedServiceItems.reduce((sum, item) => sum + (item.taxAmountForItem || 0), 0);
         let visitingChargeTax = 0; if (appConfig.enableTaxOnVisitingCharge && baseVisitingChargeForBooking > 0 && (appConfig.visitingChargeTaxPercent || 0) > 0) { visitingChargeTax = baseVisitingChargeForBooking * ((appConfig.visitingChargeTaxPercent || 0) / 100); }
         
-        let totalBasePlatformFees = storedAppliedPlatformFees.reduce((sum, fee) => sum + fee.calculatedFeeAmount, 0);
-        let totalTaxOnPlatformFees = storedAppliedPlatformFees.reduce((sum, fee) => sum + fee.taxAmountOnFee, 0);
+        const totalBasePlatformFees = storedAppliedPlatformFees.reduce((sum, fee) => sum + fee.calculatedFeeAmount, 0);
+        const totalTaxOnPlatformFees = storedAppliedPlatformFees.reduce((sum, fee) => sum + fee.taxAmountOnFee, 0);
         
         const totalTaxForBooking = totalItemTax + visitingChargeTax + totalTaxOnPlatformFees;
         const totalAmountForBooking = baseSubTotalForBooking + baseVisitingChargeForBooking + totalBasePlatformFees + totalTaxForBooking - (bookingDiscountAmount || 0);
@@ -407,7 +403,7 @@ export default function ThankYouPage() {
             body: JSON.stringify({ bookingDocId: docRef.id }),
         }).catch(err => console.error("Error triggering server post-process:", err));
 
-        clearLocalStorageItems(currentUser?.uid);
+        await clearLocalStorageItems(currentUser?.uid);
 
       } catch (error) {
         console.error("Error creating booking:", error);
